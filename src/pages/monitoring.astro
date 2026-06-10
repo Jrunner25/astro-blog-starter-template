@@ -1,0 +1,643 @@
+---
+import BaseHead from '../components/BaseHead.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+
+// Set PUBLIC_MONITOR_API_URL in your .env file or Cloudflare Worker vars
+const API_BASE = (import.meta.env.PUBLIC_MONITOR_API_URL ?? '').replace(/\/+$/, '');
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <BaseHead title="Network Monitoring" description="Live home network monitoring dashboard" />
+  <script is:inline src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script is:inline src="https://cdn.jsdelivr.net/npm/luxon@3.4.0/build/global/luxon.min.js"></script>
+  <script is:inline src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+  <script is:inline src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+</head>
+<body>
+<Header />
+
+{!API_BASE && (
+  <div class="setup-banner">
+    <strong>Setup required:</strong> Add <code>PUBLIC_MONITOR_API_URL=https://your-tunnel-url.trycloudflare.com</code> to your <code>.env</code> file (or Cloudflare Worker vars), then rebuild and deploy.
+    See the <strong>Cloudflare Tunnel</strong> instructions in the project README.
+  </div>
+)}
+
+<div class="monitor-page">
+  <div class="page">
+
+    <!-- Page title -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem">
+      <h2 style="margin:0;font-size:1rem;font-weight:700;color:var(--text-m);display:flex;align-items:center;gap:.5rem">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" style="color:#58a6ff">
+          <path d="M15.384 6.115a.485.485 0 0 0-.047-.736A12.44 12.44 0 0 0 8 3C5.259 3 2.723 3.993.663 5.379a.485.485 0 0 0-.048.736.518.518 0 0 0 .668.05A11.448 11.448 0 0 1 8 4c2.507 0 4.827.802 6.716 2.164.205.148.49.13.668-.049z"/>
+          <path d="M13.229 8.271a.482.482 0 0 0-.063-.745A9.455 9.455 0 0 0 8 6c-1.905 0-3.68.56-5.166 1.526a.48.48 0 0 0-.063.745.525.525 0 0 0 .652.065A8.46 8.46 0 0 1 8 7a8.46 8.46 0 0 1 4.576 1.336c.206.132.48.108.653-.065z"/>
+          <path d="M8 11.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/>
+        </svg>
+        House Internet Monitoring
+        <span style="font-size:.75rem;color:#8b949e;font-weight:400">TP-Link Archer</span>
+      </h2>
+      <div style="display:flex;align-items:center;gap:.75rem">
+        <span id="lastUpdate" style="font-size:.8rem;color:#8b949e">Loading…</span>
+        <div class="rpt-wrap" id="rptWrap">
+          <button class="run-btn" onclick="toggleRptMenu(event)">&#8595; Report</button>
+          <div class="rpt-menu" id="rptMenu"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ping cards -->
+    <div class="ping-grid" id="pingGrid">
+      <div class="card"><div class="card-hdr"><div class="card-hdr-l"><span class="dot dot-gray"></span>Waiting…</div></div><div class="card-body"><div class="num c-muted">--</div></div></div>
+    </div>
+
+    <!-- Legend strip -->
+    <div class="legend-strip mb">
+      <span style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;margin-right:.25rem">Legend</span>
+      <div class="leg-item"><span class="leg-line" style="border-top:2px solid #e3b341"></span> Packet Loss</div>
+      <div class="leg-item"><span class="leg-line" style="border-top:2px solid #f85149"></span> Connection Drop / Flapping</div>
+      <div class="leg-item"><span class="leg-line"></span> Speed Test Run</div>
+    </div>
+
+    <!-- Speed test -->
+    <div class="card mb">
+      <div class="card-hdr">
+        <div class="card-hdr-l">Speed Test</div>
+        <button class="run-btn" id="runBtn" onclick="onRunSpeed()">Run Now</button>
+      </div>
+      <div class="speed-strip">
+        <div class="speed-cell">
+          <div class="sub" style="margin-bottom:.3rem">Download</div>
+          <div class="num c-green" id="dlVal">--</div><span class="unit">Mbps</span>
+        </div>
+        <div class="speed-cell">
+          <div class="sub" style="margin-bottom:.3rem">Upload</div>
+          <div class="num c-red" id="ulVal">--</div><span class="unit">Mbps</span>
+        </div>
+        <div class="speed-cell">
+          <div class="sub" style="margin-bottom:.3rem">Speed Test Ping</div>
+          <div class="num c-blue" id="stPing">--</div><span class="unit">ms</span>
+        </div>
+      </div>
+      <div id="speedMeta" style="text-align:center;padding:.45rem 1rem;font-size:.73rem;color:#8b949e;border-top:1px solid #30363d">
+        No speed test run yet
+      </div>
+    </div>
+
+    <!-- Charts row -->
+    <div class="chart-row">
+      <div class="card">
+        <div class="card-hdr">
+          <div class="card-hdr-l">Latency &amp; Packet Loss — last 60 min (5s intervals)</div>
+          <span style="font-size:.68rem;color:#8b949e">Lines = latency (ms) &nbsp;·&nbsp; Lines = loss %</span>
+        </div>
+        <div class="card-body"><canvas id="latChart" height="200"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-hdr"><div class="card-hdr-l">Speed Test History</div></div>
+        <div class="card-body"><canvas id="speedChart" height="200"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Traffic chart -->
+    <div class="card mb">
+      <div class="card-hdr">
+        <div class="card-hdr-l">Network Traffic — last 60 min</div>
+        <span style="font-size:.68rem;color:#8b949e">Lines = Mbps real-time usage</span>
+      </div>
+      <div class="card-body"><canvas id="trafficChart" height="100"></canvas></div>
+    </div>
+
+    <!-- Event Summary + Device Event Log -->
+    <div class="chart-row mb">
+      <div class="card">
+        <div class="card-hdr">
+          <div class="card-hdr-l">Event Summary <span style="color:#8b949e;font-size:.65rem;font-weight:400;text-transform:none;letter-spacing:0">(last 24 h)</span></div>
+          <span id="summaryUpdated" style="font-size:.68rem;color:#8b949e"></span>
+        </div>
+        <div class="log-wrap">
+          <table class="log-table">
+            <thead><tr><th>Event</th><th>Host</th><th>Count</th><th>Last Seen</th></tr></thead>
+            <tbody id="summaryBody"><tr><td colspan="4" style="text-align:center;color:#8b949e;padding:1rem">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hdr">
+          <div class="card-hdr-l">Device Event Log <span style="color:#8b949e;font-size:.65rem;font-weight:400;text-transform:none;letter-spacing:0">(app-observed · last 200)</span></div>
+          <span id="evtCount" style="font-size:.68rem;color:#8b949e"></span>
+        </div>
+        <div class="log-wrap">
+          <table class="log-table">
+            <thead><tr><th>Time</th><th>Event</th><th>Host</th><th>Details</th></tr></thead>
+            <tbody id="evtBody"><tr><td colspan="4" style="text-align:center;color:#8b949e;padding:1rem">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ping log -->
+    <div class="card">
+      <div class="card-hdr">
+        <div class="card-hdr-l">Ping Log <span style="color:#8b949e;font-size:.65rem;font-weight:400;text-transform:none;letter-spacing:0">(last 200 entries · newest first)</span></div>
+        <span id="logCount" style="font-size:.68rem;color:#8b949e"></span>
+      </div>
+      <div class="log-wrap">
+        <table class="log-table">
+          <thead><tr><th>Time</th><th>Host</th><th>Avg&nbsp;ms</th><th>Min&nbsp;ms</th><th>Max&nbsp;ms</th><th>Loss&nbsp;%</th><th>Status</th></tr></thead>
+          <tbody id="logBody"><tr><td colspan="7" style="text-align:center;color:#8b949e;padding:1rem">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<Footer />
+
+<script define:vars={{ API_BASE }}>
+const BASE = API_BASE;
+
+/* ── report dropdown ── */
+const REPORT_OPTS = [
+  [6,'Last 6 hours'],[12,'Last 12 hours'],[24,'Last 24 hours'],
+  [48,'Last 48 hours'],[168,'Last 7 days'],[720,'Last 30 days'],
+];
+document.getElementById('rptMenu').innerHTML = REPORT_OPTS.map(([h, label]) =>
+  `<a class="rpt-opt" href="${BASE}/api/report/pdf?hours=${h}" target="_blank" onclick="closeRptMenu()">${label}</a>`
+).join('');
+
+function toggleRptMenu(e) {
+  e.stopPropagation();
+  document.getElementById('rptMenu').classList.toggle('open');
+}
+function closeRptMenu() { document.getElementById('rptMenu').classList.remove('open'); }
+document.addEventListener('click', () => closeRptMenu());
+
+/* ── helpers ── */
+const PALETTE = ['#58a6ff','#3fb950','#a371f7','#e3b341','#f85149'];
+const colorMap = {}; let nextColor = 0;
+function hostColor(h) {
+  if (!colorMap[h]) colorMap[h] = PALETTE[nextColor++ % PALETTE.length];
+  return colorMap[h];
+}
+function dotClass(reachable, loss) {
+  if (!reachable || loss === 100) return 'dot-red';
+  if (loss > 0) return 'dot-orange';
+  return 'dot-green';
+}
+function latClass(ms) {
+  if (ms == null) return 'c-muted';
+  if (ms < 20) return 'c-green';
+  if (ms < 80) return '';
+  if (ms < 150) return 'c-orange';
+  return 'c-red';
+}
+function lossBadge(reachable, loss) {
+  if (!reachable) return '<span class="bl bl-bad">OFFLINE</span>';
+  if (loss > 0)   return `<span class="bl bl-warn">${loss}% loss</span>`;
+  return '<span class="bl bl-ok">0% loss</span>';
+}
+function fmtLabel(host) {
+  if (/^([0-9a-fA-F]{2}[-:]){5}[0-9a-fA-F]{2}$/.test(host)) return `Router (${host.toUpperCase()})`;
+  if (/^(192\.168|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return `Router (${host})`;
+  if (host === '8.8.8.8')  return 'Google DNS (8.8.8.8)';
+  if (host === '1.1.1.1')  return 'Cloudflare (1.1.1.1)';
+  return host;
+}
+function hhmm(iso) {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+function hhmmss(iso) {
+  const d = new Date(iso);
+  return `${hhmm(iso)}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+
+/* ── status + ping cards ── */
+async function refreshStatus() {
+  if (!BASE) return;
+  try {
+    const { ping, speed, flapping, timestamp } = await fetch(`${BASE}/api/status`).then(r => r.json());
+    document.getElementById('pingGrid').innerHTML = ping.map(p => {
+      const flap = flapping && flapping[p.host];
+      return `<div class="card">
+        <div class="card-hdr"><div class="card-hdr-l">
+          <span class="dot ${dotClass(p.reachable, p.loss_pct)}"></span>
+          ${fmtLabel(p.host)}
+          ${flap ? '<span class="flap-badge">FLAPPING</span>' : ''}
+        </div></div>
+        <div class="card-body">
+          <div class="num ${latClass(p.avg_ms)}">${p.avg_ms ?? '--'}<span class="unit">ms</span></div>
+          <div class="sub">min&nbsp;${p.min_ms ?? '--'}ms &nbsp;·&nbsp; max&nbsp;${p.max_ms ?? '--'}ms</div>
+          ${lossBadge(p.reachable, p.loss_pct)}
+          ${p.mac ? `<div style="font-family:monospace;font-size:.65rem;color:#8b949e;margin-top:.3rem">MAC: ${p.mac}</div>` : ''}
+        </div></div>`;
+    }).join('');
+    if (speed) {
+      document.getElementById('dlVal').textContent  = speed.download_mbps ?? '--';
+      document.getElementById('ulVal').textContent  = speed.upload_mbps   ?? '--';
+      document.getElementById('stPing').textContent = speed.ping_ms       ?? '--';
+      document.getElementById('speedMeta').innerHTML =
+        (speed.server ? `Server: ${speed.server} &nbsp;·&nbsp; ` : '') +
+        new Date(speed.timestamp).toLocaleString();
+    }
+    document.getElementById('lastUpdate').textContent = 'Updated ' + hhmmss(timestamp);
+  } catch(e) { console.error('Status error', e); }
+}
+
+/* ── latency chart ── */
+let latChart;
+async function refreshLatChart() {
+  if (!BASE) return;
+  try {
+    const [data, speedData] = await Promise.all([
+      fetch(`${BASE}/api/ping/history?minutes=60`).then(r => r.json()),
+      fetch(`${BASE}/api/speed/history?limit=20`).then(r => r.json()),
+    ]);
+    const byHost = {};
+    data.forEach(row => {
+      if (!byHost[row.host]) byHost[row.host] = [];
+      byHost[row.host].push(row);
+    });
+    Object.values(byHost).forEach(arr => arr.sort((a,b) => a.timestamp < b.timestamp ? -1 : 1));
+
+    const datasets = [];
+    Object.entries(byHost).forEach(([host, rows]) => {
+      const color = hostColor(host);
+      datasets.push({
+        type:'line', label:fmtLabel(host),
+        data: rows.map(r => ({ x: r.timestamp, y: r.avg_ms })),
+        pointBackgroundColor: rows.map(r => !r.reachable ? '#f85149' : r.loss_pct > 0 ? '#e3b341' : color),
+        pointRadius: rows.map(r => (!r.reachable || r.loss_pct > 0) ? 4 : 2),
+        borderColor: color, backgroundColor: color + '18',
+        borderWidth: 2, tension: 0.3, fill: false, yAxisID: 'yLat', order: 1,
+      });
+      datasets.push({
+        type:'bar', label:`${fmtLabel(host)} loss%`,
+        data: rows.map(r => ({ x: r.timestamp, y: r.loss_pct })),
+        backgroundColor:'#e3b341', borderColor:'#e3b341', borderWidth:0, barThickness:3, yAxisID:'yLoss', order:2,
+      });
+      const isFlapping = rows.map((_,i) => {
+        const win = rows.slice(Math.max(0,i-19), i+1);
+        return win.filter((r,j) => j>0 && win[j].reachable !== win[j-1].reachable).length >= 3;
+      });
+      const redData = rows.filter((_,i) => !rows[i].reachable || isFlapping[i]).map(r => ({ x: r.timestamp, y: 100 }));
+      if (redData.length) datasets.push({
+        type:'bar', label:`${fmtLabel(host)} drop`,
+        data: redData, backgroundColor:'#f85149', borderColor:'#f85149',
+        borderWidth:0, barThickness:3, yAxisID:'yLoss', order:2,
+      });
+    });
+
+    const annotations = {};
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    speedData.forEach((r,i) => {
+      if (new Date(r.timestamp).getTime() < cutoff) return;
+      annotations[`st_${i}`] = {
+        type:'line', xMin:r.timestamp, xMax:r.timestamp,
+        borderColor:'#c9d1d9', borderWidth:1.5, borderDash:[5,4],
+        label:{ display:true, content:'Speed Test', position:'start', color:'#c9d1d9',
+          backgroundColor:'rgba(22,27,34,.85)', font:{size:8}, padding:{x:4,y:2}, yAdjust:8 },
+      };
+    });
+
+    const opts = {
+      responsive:true, animation:false,
+      interaction:{ mode:'index', intersect:false },
+      scales:{
+        x:{ type:'time', time:{ unit:'minute', displayFormats:{minute:'HH:mm'} },
+          ticks:{color:'#8b949e',maxTicksLimit:10}, grid:{color:'#21262d'} },
+        yLat:{ type:'linear', position:'left', min:0,
+          title:{display:true,text:'Latency (ms)',color:'#8b949e'},
+          ticks:{color:'#8b949e'}, grid:{color:'#21262d'} },
+        yLoss:{ type:'linear', position:'right', min:0, max:100,
+          title:{display:true,text:'Loss %',color:'#e3b341'},
+          ticks:{color:'#e3b34190', callback:v=>v+'%'}, grid:{display:false} },
+      },
+      plugins:{
+        legend:{ labels:{ color:'#e6edf3', boxWidth:12, padding:10,
+          filter: item => !item.text.includes('loss%') && !item.text.includes('drop') } },
+        tooltip:{ callbacks:{ label: ctx => {
+          if (ctx.dataset.label.endsWith('drop')) return '  Down / Flapping';
+          if (ctx.dataset.label.endsWith('loss%')) return ctx.parsed.y > 0 ? `  Loss: ${ctx.parsed.y}%` : null;
+          return `  ${ctx.dataset.label}: ${ctx.parsed.y ?? '--'}ms`;
+        }}},
+        annotation:{ annotations },
+      },
+    };
+
+    if (latChart) {
+      latChart.data.datasets = datasets;
+      latChart.options.plugins.annotation.annotations = annotations;
+      latChart.update('none');
+    } else {
+      latChart = new Chart(document.getElementById('latChart'), { type:'bar', data:{datasets}, options:opts });
+    }
+  } catch(e) { console.error('Lat chart error', e); }
+}
+
+/* ── speed chart ── */
+let speedChart;
+async function refreshSpeedChart() {
+  if (!BASE) return;
+  try {
+    const rows = await fetch(`${BASE}/api/speed/history?limit=10`).then(r => r.json());
+    const rev = [...rows].reverse();
+    const labels = rev.map(r => hhmm(r.timestamp));
+    const dl = rev.map(r => r.download_mbps);
+    const ul = rev.map(r => r.upload_mbps);
+    if (speedChart) {
+      speedChart.data.labels = labels;
+      speedChart.data.datasets[0].data = dl;
+      speedChart.data.datasets[1].data = ul;
+      speedChart.update('none');
+    } else {
+      speedChart = new Chart(document.getElementById('speedChart'), {
+        type:'bar', data:{ labels, datasets:[
+          { label:'Download (Mbps)', data:dl, backgroundColor:'#3fb95099' },
+          { label:'Upload (Mbps)',   data:ul, backgroundColor:'#f8514999' },
+        ]},
+        options:{ responsive:true, animation:false,
+          scales:{
+            x:{ ticks:{color:'#8b949e'}, grid:{color:'#21262d'} },
+            y:{ min:0, ticks:{color:'#8b949e'}, grid:{color:'#21262d'} },
+          },
+          plugins:{ legend:{ labels:{color:'#e6edf3',boxWidth:12} } },
+        },
+      });
+    }
+  } catch(e) { console.error('Speed chart error', e); }
+}
+
+/* ── traffic chart ── */
+let trafficChart;
+async function refreshTrafficChart() {
+  if (!BASE) return;
+  try {
+    const data = await fetch(`${BASE}/api/traffic/history?minutes=60`).then(r => r.json());
+    const dl = data.map(r => ({ x:r.timestamp, y:r.download_mbps }));
+    const ul = data.map(r => ({ x:r.timestamp, y:r.upload_mbps }));
+    if (trafficChart) {
+      trafficChart.data.datasets[0].data = dl;
+      trafficChart.data.datasets[1].data = ul;
+      trafficChart.update('none');
+    } else {
+      trafficChart = new Chart(document.getElementById('trafficChart'), {
+        type:'line', data:{ datasets:[
+          { label:'Download (Mbps)', data:dl, borderColor:'#3fb950', backgroundColor:'#3fb95018',
+            borderWidth:2, tension:0.3, fill:true, pointRadius:1.5 },
+          { label:'Upload (Mbps)', data:ul, borderColor:'#f85149', backgroundColor:'#f8514918',
+            borderWidth:2, tension:0.3, fill:true, pointRadius:1.5 },
+        ]},
+        options:{ responsive:true, animation:false,
+          interaction:{ mode:'index', intersect:false },
+          scales:{
+            x:{ type:'time', time:{unit:'minute',displayFormats:{minute:'HH:mm'}},
+              ticks:{color:'#8b949e',maxTicksLimit:10}, grid:{color:'#21262d'} },
+            y:{ type:'linear', min:0,
+              title:{display:true,text:'Mbps',color:'#8b949e'},
+              ticks:{color:'#8b949e'}, grid:{color:'#21262d'} },
+          },
+          plugins:{
+            legend:{ labels:{color:'#e6edf3',boxWidth:12,padding:10} },
+            tooltip:{ callbacks:{ label:ctx=>`  ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} Mbps` } },
+          },
+        },
+      });
+    }
+  } catch(e) { console.error('Traffic chart error', e); }
+}
+
+/* ── event styles ── */
+const EVT_STYLE = {
+  DOWN:       { label:'DOWN',       cls:'c-red',    bg:'rgba(248,81,73,.15)',   border:'rgba(248,81,73,.4)'   },
+  UP:         { label:'UP',         cls:'c-green',  bg:'rgba(63,185,80,.15)',   border:'rgba(63,185,80,.4)'   },
+  FLAP:       { label:'FLAPPING',   cls:'c-orange', bg:'rgba(227,179,65,.15)',  border:'rgba(227,179,65,.4)'  },
+  SPEED_TEST: { label:'SPEED TEST', cls:'c-blue',   bg:'rgba(88,166,255,.15)',  border:'rgba(88,166,255,.4)'  },
+  AUTO_SPEED: { label:'AUTO SPEED', cls:'',         bg:'rgba(163,113,247,.15)', border:'rgba(163,113,247,.4)' },
+};
+function evtBadge(type) {
+  const s = EVT_STYLE[type] || { label:type, cls:'c-muted', bg:'transparent', border:'#30363d' };
+  return `<span style="display:inline-block;font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:4px;background:${s.bg};border:1px solid ${s.border}" class="${s.cls}">${s.label}</span>`;
+}
+
+/* ── event summary ── */
+async function refreshEventSummary() {
+  if (!BASE) return;
+  try {
+    const rows = await fetch(`${BASE}/api/events/summary?hours=24`).then(r => r.json());
+    document.getElementById('summaryUpdated').textContent = rows.length + ' types';
+    document.getElementById('summaryBody').innerHTML = rows.length
+      ? rows.map(r => `<tr>
+          <td>${evtBadge(r.event_type)}</td>
+          <td class="c-muted">${r.host ? fmtLabel(r.host) : '--'}</td>
+          <td style="font-weight:700;color:#e6edf3">${r.count}</td>
+          <td class="c-muted">${hhmmss(r.last_seen)}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="4" style="text-align:center;color:#8b949e;padding:1rem">No events yet</td></tr>';
+  } catch(e) { console.error('Summary error', e); }
+}
+
+/* ── device event log ── */
+async function refreshEventLog() {
+  if (!BASE) return;
+  try {
+    const rows = await fetch(`${BASE}/api/events?limit=200`).then(r => r.json());
+    document.getElementById('evtCount').textContent = rows.length + ' events';
+    document.getElementById('evtBody').innerHTML = rows.length
+      ? rows.map(r => `<tr>
+          <td class="c-muted">${hhmmss(r.timestamp)}</td>
+          <td>${evtBadge(r.event_type)}</td>
+          <td class="c-muted">${r.host ? fmtLabel(r.host) : '--'}</td>
+          <td style="font-size:.75rem;color:#8b949e">${r.details || ''}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="4" style="text-align:center;color:#8b949e;padding:1rem">No events yet</td></tr>';
+  } catch(e) { console.error('Event log error', e); }
+}
+
+/* ── ping log ── */
+async function refreshLog() {
+  if (!BASE) return;
+  try {
+    const rows = await fetch(`${BASE}/api/ping/logs?limit=200`).then(r => r.json());
+    document.getElementById('logCount').textContent = rows.length + ' entries';
+    document.getElementById('logBody').innerHTML = rows.map(r => {
+      const rowClass = !r.reachable ? 'row-down' : r.loss_pct > 0 ? 'row-loss' : '';
+      const status = r.reachable
+        ? '<span class="bl bl-ok" style="margin-top:0">UP</span>'
+        : '<span class="bl bl-bad" style="margin-top:0">DOWN</span>';
+      return `<tr class="${rowClass}">
+        <td class="c-muted">${hhmmss(r.timestamp)}</td>
+        <td>${fmtLabel(r.host)}</td>
+        <td class="${latClass(r.avg_ms)}">${r.avg_ms ?? '--'}</td>
+        <td class="c-muted">${r.min_ms ?? '--'}</td>
+        <td class="c-muted">${r.max_ms ?? '--'}</td>
+        <td class="${r.loss_pct > 0 ? 'c-orange' : 'c-muted'}">${r.loss_pct ?? 0}</td>
+        <td>${status}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) { console.error('Log error', e); }
+}
+
+/* ── speed test ── */
+async function onRunSpeed() {
+  if (!BASE) return;
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true; btn.textContent = 'Running…';
+  document.getElementById('speedMeta').textContent = 'Speed test running — please wait ~30 s…';
+  try {
+    await fetch(`${BASE}/api/speed/run`, { method:'POST' });
+    await Promise.all([refreshStatus(), refreshSpeedChart()]);
+  } catch(e) {
+    document.getElementById('speedMeta').textContent = 'Speed test failed — check console';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Run Now';
+  }
+}
+
+/* ── refresh loop ── */
+async function refresh() {
+  await Promise.all([
+    refreshStatus(), refreshLatChart(), refreshSpeedChart(),
+    refreshTrafficChart(), refreshEventSummary(), refreshEventLog(), refreshLog(),
+  ]);
+}
+refresh();
+if (BASE) setInterval(refresh, 5_000);
+</script>
+
+<style is:global>
+  /* override body for dark monitoring page */
+  body { background: #0d1117 !important; background-size: unset !important; }
+  :root {
+    --bg:     #0d1117; --card:   #161b22; --border: #30363d;
+    --text-m: #e6edf3; --muted:  #8b949e; --green:  #3fb950;
+    --blue:   #58a6ff; --orange: #e3b341; --red:    #f85149;
+  }
+  /* override global main width */
+  .monitor-page { background: #0d1117; min-height: calc(100vh - 160px); }
+  .monitor-page .page { padding: 1.25rem; max-width: 1400px; margin: 0 auto; }
+
+  /* darken site header for this page */
+  header { background: #161b22 !important; box-shadow: 0 1px 0 #30363d !important; }
+  header nav a { color: #e6edf3 !important; }
+  header h2 a { color: #58a6ff !important; }
+  footer { background: #161b22 !important; border-top: 1px solid #30363d; }
+  footer, footer a { color: #8b949e !important; }
+
+  /* setup banner */
+  .setup-banner {
+    background: rgba(227,179,65,.12); border: 1px solid rgba(227,179,65,.4);
+    color: #e6edf3; padding: .75rem 1.25rem; font-size: .85rem;
+    border-radius: 0;
+  }
+  .setup-banner code { background: rgba(255,255,255,.08); padding: 2px 5px; border-radius: 3px; font-size: .8rem; }
+
+  /* card */
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+  .card-hdr {
+    background: transparent; border-bottom: 1px solid #30363d;
+    padding: .55rem 1rem; font-size: .75rem; color: #8b949e;
+    text-transform: uppercase; letter-spacing: .06em;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .card-hdr-l { display: flex; align-items: center; gap: .45rem; }
+  .card-body  { padding: 1rem; }
+
+  /* status dots */
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+  .dot-green  { background: #3fb950; box-shadow: 0 0 6px #3fb950; }
+  .dot-orange { background: #e3b341; box-shadow: 0 0 6px #e3b341; }
+  .dot-red    { background: #f85149; box-shadow: 0 0 6px #f85149; }
+  .dot-gray   { background: #8b949e; }
+
+  /* flapping badge */
+  .flap-badge {
+    display: inline-block; font-size: .65rem; font-weight: 700;
+    padding: 2px 7px; border-radius: 4px; margin-left: 6px;
+    background: rgba(248,81,73,.2); color: #f85149;
+    border: 1px solid rgba(248,81,73,.5);
+    animation: flap-pulse 1s ease-in-out infinite alternate;
+  }
+  @keyframes flap-pulse { from { opacity: .7; } to { opacity: 1; } }
+
+  /* legend strip */
+  .legend-strip {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 1.25rem;
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: .55rem 1rem; font-size: .78rem; color: #8b949e;
+  }
+  .leg-item { display: flex; align-items: center; gap: .45rem; }
+  .leg-swatch { width: 13px; height: 13px; border-radius: 3px; flex-shrink: 0; }
+  .leg-line   { width: 22px; height: 0; border-top: 2px dashed #c9d1d9; flex-shrink: 0; }
+
+  /* numbers */
+  .num  { font-size: 2.4rem; font-weight: 700; line-height: 1; color: #e6edf3; }
+  .unit { font-size: .8rem; color: #8b949e; margin-left: 3px; }
+  .sub  { font-size: .72rem; color: #8b949e; margin-top: .35rem; }
+
+  .c-green  { color: #3fb950; }
+  .c-blue   { color: #58a6ff; }
+  .c-orange { color: #e3b341; }
+  .c-red    { color: #f85149; }
+  .c-muted  { color: #8b949e; }
+
+  /* loss badges */
+  .bl { display: inline-block; font-size: .68rem; padding: 2px 8px; border-radius: 20px; margin-top: .4rem; }
+  .bl-ok   { background: rgba(63,185,80,.15);  color: #3fb950; border: 1px solid rgba(63,185,80,.3); }
+  .bl-warn { background: rgba(227,179,65,.15); color: #e3b341; border: 1px solid rgba(227,179,65,.3); }
+  .bl-bad  { background: rgba(248,81,73,.15);  color: #f85149; border: 1px solid rgba(248,81,73,.3); }
+
+  /* grids */
+  .ping-grid  { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+  .speed-strip { display: grid; grid-template-columns: repeat(3,1fr); }
+  .speed-cell  { text-align: center; padding: 1rem .5rem; border-right: 1px solid #30363d; }
+  .speed-cell:last-child { border-right: none; }
+  .chart-row  { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem; margin-bottom: 1.25rem; }
+  @media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
+
+  .mb { margin-bottom: 1.25rem; }
+
+  /* buttons */
+  .run-btn {
+    background: transparent; border: 1px solid #30363d; color: #e6edf3;
+    border-radius: 5px; padding: 2px 10px; font-size: .72rem; cursor: pointer;
+  }
+  .run-btn:hover:not(:disabled) { border-color: #58a6ff; color: #58a6ff; }
+  .run-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* report dropdown */
+  .rpt-wrap { position: relative; display: inline-block; }
+  .rpt-menu {
+    display: none; position: absolute; right: 0; top: calc(100% + 4px);
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    padding: 4px; min-width: 150px; z-index: 200; box-shadow: 0 4px 12px rgba(0,0,0,.4);
+  }
+  .rpt-menu.open { display: block; }
+  .rpt-opt {
+    display: block; padding: 6px 12px; font-size: .78rem; color: #e6edf3;
+    text-decoration: none; border-radius: 4px; white-space: nowrap;
+  }
+  .rpt-opt:hover { background: rgba(88,166,255,.1); color: #58a6ff; }
+
+  /* log table */
+  .log-wrap { max-height: 320px; overflow-y: auto; }
+  .log-table { width: 100%; border-collapse: collapse; font-size: .78rem; font-variant-numeric: tabular-nums; }
+  .log-table th {
+    padding: .4rem .75rem; color: #8b949e; font-weight: 500;
+    text-transform: uppercase; font-size: .68rem; letter-spacing: .05em;
+    border-bottom: 1px solid #30363d;
+    position: sticky; top: 0; background: #161b22; z-index: 1;
+  }
+  .log-table td { padding: .28rem .75rem; border-bottom: 1px solid rgba(48,54,61,.5); color: #e6edf3; }
+  .log-table tr:last-child td { border-bottom: none; }
+  .log-table tr:hover td { background: rgba(255,255,255,.02); }
+  .row-down { background: rgba(248,81,73,.04); }
+  .row-loss { background: rgba(227,179,65,.04); }
+</style>
+
+</body>
+</html>
