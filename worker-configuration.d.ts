@@ -7,6 +7,7 @@ declare namespace Cloudflare {
 	}
 	interface Env {
 		ASSETS: Fetcher;
+		MONITOR_API_URL: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

@@ -1,5 +1,8 @@
 {
 	"name": "astro-blog-starter-template",
+	"vars": {
+		"MONITOR_API_URL": "https://enrollment-licensed-authorities-possibilities.trycloudflare.com"
+	},
 	"compatibility_date": "2025-10-08",
 	"compatibility_flags": ["nodejs_compat"],
 	"main": "./dist/_worker.js/index.js",

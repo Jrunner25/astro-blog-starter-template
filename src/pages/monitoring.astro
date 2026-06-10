@@ -3,8 +3,13 @@ import BaseHead from '../components/BaseHead.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 
-// Set PUBLIC_MONITOR_API_URL in your .env file or Cloudflare Worker vars
-const API_BASE = (import.meta.env.PUBLIC_MONITOR_API_URL ?? '').replace(/\/+$/, '');
+// Runtime env (Cloudflare Workers) takes priority; falls back to build-time env for local dev
+const runtime = Astro.locals.runtime as { env?: Record<string, string> } | undefined;
+const API_BASE = (
+  runtime?.env?.MONITOR_API_URL ??
+  import.meta.env.PUBLIC_MONITOR_API_URL ??
+  ''
+).replace(/\/+$/, '');
 ---
 <!doctype html>
 <html lang="en">
