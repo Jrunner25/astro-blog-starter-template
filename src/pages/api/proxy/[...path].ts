@@ -1,3 +1,4 @@
+export const prerender = false;
 import type { APIRoute } from 'astro';
 
 const TUNNEL = 'https://enrollment-licensed-authorities-possibilities.trycloudflare.com';
